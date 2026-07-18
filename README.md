@@ -9,7 +9,7 @@ To clone and deploy this tool directly onto your NetHunter or Termux environment
 
 ```bash
 # Clone the repository from GitHub
-git clone [https://github.com/kuzenispupan106-afk/GhostHound-.git](https://github.com/kuzenispupan106-afk/GhostHound-.git)
+git clone https://github.com/kuzenispupan106-afk/GhostHound-.git
 
 # Move into the project directory
 cd GhostHound-
