@@ -16,4 +16,4 @@ cd GhostHound-
 
 # Install the required framework dependencies
 pip install python-dotenv rich requests colorama phonenumbers python-whois dnspython beautifulsoup4 aiohttp validators --break-system-packages
-python3 ghosthound.py
+python3 GhostHund.py
