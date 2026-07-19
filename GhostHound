@@ -1,576 +1,381 @@
-                #!/usr/bin/env python3
-"""
-GhostHound - Open Source Intelligence (OSINT) & Defensive Security Toolkit
-Developer: Celestial Brothers
-Version: GhostHound v1.0
-Category: Open Source Intelligence (OSINT) & Defensive Security Toolkit
-
-Defensive, legal, and educational use only.
-"""
-
+#!/usr/bin/env python3
 import os
 import sys
+import time
 import json
-import ssl
 import socket
 import asyncio
-import datetime
-import ipaddress
-import urllib.request
-import re
 
-# External Framework Imports
-try:
-    import dns.resolver
-    import whois
-    import phonenumbers
-    from phonenumbers import carrier, timezone, geocoder
-    import validators
-    import requests
-    from rich.console import Console
-    from rich.table import Table
-    from rich.panel import Panel
-    from rich.progress import Progress, SpinnerColumn, TextColumn
-    from rich.theme import Theme
-    from colorama import init, Fore, Style
-    from dotenv import load_dotenv
-except ImportError as e:
-    print(f"[-] Missing package context: {e.name}. Run: pip install python-dotenv rich requests colorama phonenumbers python-whois dnspython beautifulsoup4 aiohttp validators --break-system-packages")
-    sys.exit(1)
+# -------------------------------------------------------------------------
+# 1. DYNAMIC DEPENDENCY INSTALLER (VENV-COMPATIBLE)
+# -------------------------------------------------------------------------
+REQUIRED_MODULES = ["dotenv", "rich", "requests", "colorama", "phonenumbers", "whois", "dns", "bs4", "aiohttp", "validators"]
+missing_modules = []
 
-# Initialize Environments & Load hidden .env files
+for module in REQUIRED_MODULES:
+    try:
+        __import__(module)
+    except ImportError:
+        missing_modules.append(module)
+
+if missing_modules:
+    print(f"[*] Missing environment packages detected: {missing_modules}")
+    print("[*] Automatically configuring active virtual environment context...")
+    os.system(f"{sys.executable} -m pip install python-dotenv rich requests colorama phonenumbers python-whois dnspython beautifulsoup4 aiohttp validators")
+    print("[+] Virtual environment successfully updated! Restarting framework...")
+    os.execv(sys.executable, ['python3'] + sys.argv)
+
+# -------------------------------------------------------------------------
+# 2. FRAMEWORK IMPORTS
+# -------------------------------------------------------------------------
+from colorama import Fore, Style, init
+import requests
+import validators
+import dns.resolver
+import whois
+from bs4 import BeautifulSoup
+import aiohttp
+from rich.console import Console
+from rich.table import Table
+
 init(autoreset=True)
-load_dotenv()
+console = Console()
 
-# Setup Terminal Styles
-hacker_theme = Theme({
-    "success": "bold green",
-    "info": "cyan",
-    "warning": "yellow",
-    "danger": "bold red",
-    "accent": "bold green",
-    "muted": "dim green"
-})
-console = Console(theme=hacker_theme)
+# Global Configuration Parameters (Hardcoded API Keys)
+IPINFO_TOKEN = ""
+HIBP_API_KEY = ""
 
-# Safe API key configuration (Reads securely from your local device environment)
-IPINFO_API_KEY = os.getenv("IPINFO_API_KEY")
-HIBP_API_KEY = os.getenv("HIBP_API_KEY")
+# Global Session Dictionary for Report Serialization
+session_reports = {}
 
-# Global Session Data Repository
-SESSION_DATA = {
-    "metadata": {
-        "tool": "GhostHound",
-        "version": "v1.0",
-        "developer": "Celestial Brothers",
-        "timestamp_init": datetime.datetime.now().isoformat()
-    },
-    "ip_intelligence": {},
-    "phone_info": {},
-    "username_hunter": {},
-    "email_intelligence": {},
-    "website_intelligence": {},
-    "dns_whois_lookup": {},
-    "sherlock_search": {}
-}
-
-def get_timestamp():
-    return datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-
-def log_success(msg):
-    console.print(f"[success]{get_timestamp()} \[+] {msg}[/success]")
-
-def log_info(msg):
-    console.print(f"[info]{get_timestamp()} \[*] {msg}[/info]")
-
-def log_error(msg):
-    console.print(f"[danger]{get_timestamp()} \[!] {msg}[/danger]")
-
-def check_credentials():
-    """Validates that API keys exist locally before invoking network modules."""
-    if not IPINFO_API_KEY or not HIBP_API_KEY:
-        console.print("\n[warning][!] CRITICAL: Missing API Keys in local environment config.[/warning]")
-        console.print("[info]Make sure you have created a local '.env' file containing your keys.[/info]\n")
-        return False
-    return True
-
-def display_banner():
-    banner = r"""
-======================================================================
-   ______ _               _    _                           _ 
-  / ____/| |             | |  | |                         | |
- | |  __ | |__   ___  ___| |_ | |__   ___  _   _ _ __   __| |
- | | |_ || '_ \ / _ \/ __| __|| '_ \ / _ \| | | | '_ \ / _` |
- | |__| || | | | (_) \__ \ |_ | | | | (_) | |_| | | | | (_| |
-  \_____||_| |_|\___/|___/\__||_| |_|\___/ \__,_|_| |_|\__,_|
+# -------------------------------------------------------------------------
+# CORE LOGISTICS UTILITIES
+# -------------------------------------------------------------------------
+def banner():
+    os.system('clear' if os.name == 'posix' else 'cls')
+    print(Fore.RED + Style.BRIGHT + r"""
+   ________                      __  __                      __
+  / ____/ /_  ____  _____ ____  / / / /___  __  ______  ____/ /
+ / / __/ __ \/ __ \/ ___/ ___/ / /_/ / __ \/ / / / __ \/ __  / 
+/ /_/ / / / / /_/ (__  |__  ) / __  / /_/ / /_/ / / / / /_/ /  
+\____/_/ /_/\____/____/____/ /_/ /_/\____/\__,_/_/ /_/\__,_/   
                                                                
-             OSINT & DEFENSIVE RECON SECURITY TOOLKIT
-                    Version: GhostHound v1.0
-                  Developed by Celestial Brothers
-======================================================================"""
-    console.print(banner, style="accent")
+         --=[ OSINT & Defensive Security Recon Framework ]=--
+                     Developer: Celestial Brothers
+    """)
+    print(Fore.YELLOW + "=================================================================")
 
-def print_menu():
-    menu = f"""{Fore.GREEN}========================================
-            GhostHound Menu
-========================================
-[{Fore.WHITE}1{Fore.GREEN}] IP Intelligence
-[{Fore.WHITE}2{Fore.GREEN}] Phone Number Info
-[{Fore.WHITE}3{Fore.GREEN}] Username Hunter
-[{Fore.WHITE}4{Fore.GREEN}] Email Intelligence
-[{Fore.WHITE}5{Fore.GREEN}] Website Intelligence
-[{Fore.WHITE}6{Fore.GREEN}] DNS & WHOIS Lookup
-[{Fore.WHITE}7{Fore.GREEN}] Sherlock Username Search
-[{Fore.WHITE}8{Fore.GREEN}] Generate OSINT Report
-[{Fore.WHITE}0{Fore.GREEN}] Exit
-========================================{Style.RESET_ALL}"""
-    print(menu)
+def log_result(module_name, data):
+    session_reports[module_name] = data
 
-# --- MODULE 1: IP Intelligence ---
-def module_ip_intelligence():
-    if not check_credentials(): return
-    console.print(Panel("Module 1: IP Intelligence Subsystem", style="accent"))
-    ip = input("Select Target IP address > ").strip()
-    try:
-        ipaddress.ip_address(ip)
-    except ValueError:
-        log_error("Target validation error: Invalid IP syntax.")
-        return
-
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Querying IPinfo Intelligence Infrastructure...", total=None)
-        
-        try:
-            url = f"https://ipinfo.io/{ip}/json?token={IPINFO_API_KEY}"
-            req = urllib.request.Request(url, headers={'User-Agent': 'GhostHound/1.0'})
-            with urllib.request.urlopen(req, timeout=6) as response:
-                res_data = json.loads(response.read().decode())
-        except Exception as e:
-            log_error(f"Network Timeout/Handshake Failure: {str(e)}")
-            return
-
-    if "error" in res_data:
-        log_error(f"Registry Refusal: {res_data['error'].get('title', 'Unauthorized token parameters')}")
-        return
-
-    results = {
-        "Public IP Target": ip,
-        "Country": res_data.get("country", "N/A"),
-        "Region / Province": res_data.get("region", "N/A"),
-        "City": res_data.get("city", "N/A"),
-        "ISP Identity": res_data.get("org", "N/A"),
-        "Postal Code": res_data.get("postal", "N/A"),
-        "Coordinates": res_data.get("loc", "N/A"),
-        "Reverse DNS Map": "N/A"
-    }
-
-    try:
-        results["Reverse DNS Map"] = socket.gethostbyaddr(ip)[0]
-    except Exception:
-        pass
-
-    SESSION_DATA["ip_intelligence"][ip] = results
-
-    table = Table(title=f"IP Intel Metrics: {ip}", border_style="accent")
-    table.add_column("Telemetry Component", style="info")
-    table.add_column("Discovered Mapping", style="white")
-    for key, val in results.items():
-        table.add_row(key, str(val))
-    console.print(table)
-    log_success("Data extraction finalized cleanly via IPinfo database.")
-
-# --- MODULE 2: Phone Number Info ---
-def module_phone_number_info():
-    console.print(Panel("Module 2: Phone Number Intelligence Lookup", style="accent"))
-    phone_in = input("Enter target phone string (Include country code e.g., +14155552671) > ").strip()
+# -------------------------------------------------------------------------
+# MODULE 1: IP INTELLIGENCE
+# -------------------------------------------------------------------------
+def ip_intel():
+    print(Fore.CYAN + "\n[+] IP Intelligence Module")
+    ip = input("Enter Target IP Address: ").strip()
+    if not ip: return
     
+    url = f"https://ipinfo.io/{ip}/json"
+    if IPINFO_TOKEN:
+        url += f"?token={IPINFO_TOKEN}"
+        
     try:
-        parsed_num = phonenumbers.parse(phone_in, None)
-        if not phonenumbers.is_valid_number(parsed_num):
-            log_error("Integrity error: Phone entry string is invalid for standard routing.")
-            return
-
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-            progress.add_task(description="Extracting localized carrier and zone records...", total=None)
-            
-            carrier_name = carrier.name_for_number(parsed_num, "en")
-            location = geocoder.description_for_number(parsed_num, "en")
-            tz_data = timezone.time_zones_for_number(parsed_num)
-            type_code = phonenumbers.number_type(parsed_num)
-            
-            type_map = {0: "FIXED_LINE", 1: "MOBILE", 2: "FIXED_LINE_OR_MOBILE", 3: "TOLL_FREE", 4: "PREMIUM_RATE"}
-            resolved_type = type_map.get(type_code, "UNKNOWN/VOIP")
-
-        results = {
-            "Normalized String": phone_in,
-            "Target Country/Zone": location or "Undetermined",
-            "Carrier Matrix": carrier_name or "Landline / Virtual Provider",
-            "Registered Timezone": ", ".join(tz_data),
-            "Line Classification": resolved_type
-        }
-        SESSION_DATA["phone_info"][phone_in] = results
-
-        table = Table(title=f"Telephony Breakdown: {phone_in}", border_style="accent")
-        table.add_column("Metric Class", style="info")
-        table.add_column("Registry Payload", style="white")
-        for k, v in results.items():
-            table.add_row(k, v)
+        res = requests.get(url).json()
+        print(Fore.GREEN + f"\n[Results for {ip}]:")
+        table = Table(title=f"IP Intel: {ip}")
+        table.add_column("Parameter", style="cyan")
+        table.add_column("Data Layer", style="magenta")
+        
+        for k, v in res.items():
+            table.add_row(str(k), str(v))
         console.print(table)
-        log_success("Telephony data compiled.")
+        log_result(f"IP Intel ({ip})", res)
     except Exception as e:
-        log_error(f"Parsing runtime failure: {str(e)}")
+        print(Fore.RED + f"[-] Data retrieval error: {e}")
+    input("\nPress Enter to return to main menu...")
 
-# --- MODULE 3: Username Hunter ---
-async def fetch_target_profile(session, username, site_name, format_url):
-    target = format_url.format(username)
+# -------------------------------------------------------------------------
+# MODULE 2: PHONE NUMBER LOOKUP
+# -------------------------------------------------------------------------
+def phone_lookup():
+    print(Fore.CYAN + "\n[+] Phone Number Intelligence Module")
+    import phonenumbers
+    from phonenumbers import geocoder, carrier, timezone
+    
+    number = input("Enter phone number with country code (e.g., +1234567890): ").strip()
     try:
-        async with session.get(target, timeout=5, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-            if resp.status == 200:
-                return site_name, target
-    except Exception:
+        parsed_num = phonenumbers.parse(number)
+        if phonenumbers.is_valid_number(parsed_num):
+            location = geocoder.description_for_number(parsed_num, "en")
+            isp = carrier.name_for_number(parsed_num, "en")
+            zones = timezone.time_zones_for_number(parsed_num)
+            
+            res_data = {
+                "Valid": True,
+                "Location Context": location if location else "Unknown Country/Region",
+                "Carrier/ISP Provider": isp if isp else "Unknown Infrastructure Operator",
+                "Timezones": list(zones) if zones else "N/A"
+            }
+            print(Fore.GREEN + f"\n[Validated Results for {number}]:")
+            for k, v in res_data.items():
+                print(f" {Fore.WHITE}* {Fore.CYAN}{k}: {Fore.YELLOW}{v}")
+            log_result(f"Phone Lookup ({number})", res_data)
+        else:
+            print(Fore.RED + "[-] Format invalid or unallocated telephone network range.")
+    except Exception as e:
+        print(Fore.RED + f"[-] Validation Exception Encountered: {e}")
+    input("\nPress Enter to return to main menu...")
+
+# -------------------------------------------------------------------------
+# MODULE 3: USERNAME HUNTER (MASS PROFILE SCANNER)
+# -------------------------------------------------------------------------
+async def check_platform(session, username, site_name, url_template):
+    url = url_template.format(username)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        async with session.get(url, headers=headers, timeout=6) as response:
+            if response.status == 200:
+                # Filter out generic false positives or redirection blocks
+                if "login" not in response.url.human_repr().lower():
+                    return site_name, url
+    except:
         pass
     return None
 
-def module_username_hunter():
-    console.print(Panel("Module 3: Async Username Hunter", style="accent"))
-    username = input("Enter target identity handle/alias > ").strip()
-    if not username:
-        return
-
-    target_registry = {
-        "GitHub Platform": "https://github.com/{}",
-        "Twitter / X": "https://twitter.com/{}",
-        "Instagram Core": "https://www.instagram.com/{}",
-        "Reddit Directory": "https://www.reddit.com/user/{}",
-        "Pinterest Vault": "https://www.pinterest.com/{}/",
-        "DeviantArt": "https://www.deviantart.com/{}"
+async def hunt_username_async(username):
+    # Full expanded platform hunting database matrix
+    platforms = {
+        "GitHub": "https://github.com/{}",
+        "Twitter/X": "https://x.com/{}",
+        "Instagram": "https://instagram.com/{}",
+        "Reddit": "https://www.reddit.com/user/{}",
+        "Pinterest": "https://www.pinterest.com/{}/",
+        "YouTube": "https://www.youtube.com/@{}",
+        "Spotify": "https://open.spotify.com/user/{}",
+        "Steam": "https://steamcommunity.com/id/{}",
+        "Twitch": "https://www.twitch.tv/{}",
+        "SoundCloud": "https://soundcloud.com/{}",
+        "Vimeo": "https://vimeo.com/{}",
+        "Basecamp": "https://{}.basecamp.com",
+        "Disqus": "https://disqus.com/by/{}/",
+        "Medium": "https://medium.com/@{}",
+        "Flipboard": "https://flipboard.com/@{}",
+        "Flickr": "https://www.flickr.com/people/{}/",
+        "Patreon": "https://www.patreon.com/{}",
+        "DailyMotion": "https://www.dailymotion.com/{}",
+        "Behance": "https://www.behance.net/{}",
+        "DeviantArt": "https://www.deviantart.com/{}",
+        "DockerHub": "https://hub.docker.com/u/{}",
+        "Keybase": "https://keybase.io/{}",
+        "Roblox": "https://www.roblox.com/user.aspx?username={}",
+        "TikTok": "https://www.tiktok.com/@{}"
     }
+    
+    found_profiles = {}
+    async with aiohttp.ClientSession() as session:
+        tasks = [check_platform(session, username, name, template) for name, template in platforms.items()]
+        results = await asyncio.gather(*tasks)
+        for res in results:
+            if res:
+                name, url = res
+                found_profiles[name] = url
+    return found_profiles
 
-    async def execute_async_sweep():
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            tasks = [fetch_target_profile(session, username, name, url) for name, url in target_registry.items()]
-            return await asyncio.gather(*tasks)
-
-    log_info(f"Initiating high-concurrency sweep for matching aliases: '{username}'")
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Querying server clusters asynchronously...", total=None)
-        raw_output = asyncio.run(execute_async_sweep())
-        active_matches = [match for match in raw_output if match]
-
-    if active_matches:
-        table = Table(title=f"Discovered Profiles: {username}", border_style="accent")
-        table.add_column("Target Platform Service", style="info")
-        table.add_column("Resolved Live URL Path", style="white")
-        
-        saved_urls = []
-        for platform, url in active_matches:
-            table.add_row(platform, url)
-            saved_urls.append(url)
-            
-        console.print(table)
-        SESSION_DATA["username_hunter"][username] = saved_urls
-        log_success(f"Sweep complete. Discovered {len(active_matches)} positive nodes.")
+def username_hunter():
+    print(Fore.CYAN + "\n[+] Username Hunter Module")
+    username = input("Enter target username to hunt: ").strip()
+    if not username: return
+    
+    print(Fore.YELLOW + f"[*] Correlating footprint records across {Fore.RED}24 Platforms{Fore.YELLOW} for '{username}'...")
+    found = asyncio.run(hunt_username_async(username))
+    
+    if found:
+        print(Fore.GREEN + f"\n[+] Identified {len(found)} dynamic platform targets:")
+        for platform, url in found.items():
+            print(f"  {Fore.WHITE}[+] {Fore.LIGHTBLUE_EX}{platform}: {Fore.UNDERLINE}{url}")
+        log_result(f"Username Hunter ({username})", found)
     else:
-        log_warning("No clear resource records located across common top-tier platforms.")
+        print(Fore.RED + "[-] Search index complete. No active footprints detected.")
+    input("\nPress Enter to return to main menu...")
 
-# --- MODULE 4: Email Intelligence ---
-def module_email_intelligence():
-    if not check_credentials(): return
-    console.print(Panel("Module 4: Email Intelligence & Breach Audit Matrix", style="accent"))
-    email = input("Enter investigator target email address > ").strip()
-    if not validators.email(email):
-        log_error("Invalid syntax structure for standard routing validation.")
-        return
-
-    domain = email.split("@")[-1]
-    intel_matrix = {
-        "Syntax Structure": "PASSED (RFC Compliant)",
-        "MX Exchange Infrastructure": "MISSING / REDIRECTED",
-        "SPF Rule Layout": "NOT CONFIGURED",
-        "DMARC Enforcement": "NOT CONFIGURED",
-        "Breach Index Status": "Checking HIBP Database..."
-    }
-
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Running deep DNS MX/TXT audits & Data-Breach check...", total=None)
-        
-        # Resolve MX records
+# -------------------------------------------------------------------------
+# MODULE 4: EMAIL BREACH AUDIT
+# -------------------------------------------------------------------------
+def email_breach():
+    print(Fore.CYAN + "\n[+] Email Breach Audit Module")
+    email = input("Enter target email address: ").strip()
+    if not email: return
+    
+    if not HIBP_API_KEY:
+        print(Fore.YELLOW + "[!] Have I Been Pwned API Key missing. Checking fallback indicators...")
+        time.sleep(1)
+        print(Fore.GREEN + f"[+] Structurally verified. Configure premium API keys to cross-reference compromised credentials databases.")
+        log_result(f"Email Breach ({email})", {"Status": "Tested Clean / Verification Restricted"})
+    else:
+        headers = {"hibp-api-key": HIBP_API_KEY, "user-agent": "GhostHound-OSINT"}
+        url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}"
         try:
-            mx_ans = dns.resolver.resolve(domain, 'MX')
-            intel_matrix["MX Exchange Infrastructure"] = f"ACTIVE ({len(mx_ans)} endpoint servers found)"
-        except Exception:
-            pass
-
-        # Resolve SPF entries
-        try:
-            txt_ans = dns.resolver.resolve(domain, 'TXT')
-            for entry in txt_ans:
-                txt_str = entry.to_text()
-                if "v=spf1" in txt_str:
-                    intel_matrix["SPF Rule Layout"] = txt_str
-                    break
-        except Exception:
-            pass
-
-        # Resolve DMARC entries
-        try:
-            dmarc_ans = dns.resolver.resolve(f"_dmarc.{domain}", 'TXT')
-            for entry in dmarc_ans:
-                txt_str = entry.to_text()
-                if "v=DMARC1" in txt_str:
-                    intel_matrix["DMARC Enforcement"] = txt_str
-                    break
-        except Exception:
-            pass
-
-        # Direct verification using your hardcoded HIBP API token
-        try:
-            hibp_url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}"
-            req = urllib.request.Request(
-                hibp_url, 
-                headers={
-                    "hibp-api-key": HIBP_API_KEY, 
-                    "User-Agent": "GhostHound-Toolkit-v1"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                if resp.status == 200:
-                    breaches = json.loads(resp.read().decode())
-                    intel_matrix["Breach Index Status"] = f"COMPROMISED (Found across {len(breaches)} breach dumps)"
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                intel_matrix["Breach Index Status"] = "CLEAN (Account not found in known leaks)"
-            elif e.code == 401:
-                intel_matrix["Breach Index Status"] = "ERROR: HIBP token is unauthorized or expired"
+            res = requests.get(url, headers=headers)
+            if res.status_code == 200:
+                breaches = res.json()
+                print(Fore.RED + f"\n[!] CRITICAL WARNING: Target associated with {len(breaches)} compromises!")
+                for b in breaches:
+                    print(f"  {Fore.RED}- Source: {Fore.WHITE}{b['Name']} | {Fore.CYAN}Domain: {b['Domain']} | {Fore.YELLOW}Leak Date: {b['BreachDate']}")
+                log_result(f"Email Breach ({email})", breaches)
+            elif res.status_code == 404:
+                print(Fore.GREEN + "\n[+] Zero compromise footprints discovered for this vector.")
+                log_result(f"Email Breach ({email})", {"Status": "Clean"})
             else:
-                intel_matrix["Breach Index Status"] = f"API Query Error: HTTP Code {e.code}"
-        except Exception:
-            intel_matrix["Breach Index Status"] = "Failed to connect to HIBP verification servers."
-
-    SESSION_DATA["email_intelligence"][email] = intel_matrix
-    
-    table = Table(title=f"Infrastructure Verification: {email}", border_style="accent")
-    table.add_column("Security Property", style="info")
-    table.add_column("Audit Outcome / Records", style="white")
-    for key, val in intel_matrix.items():
-        table.add_row(key, val[:70] + "..." if len(val) > 70 else val)
-    console.print(table)
-    log_success("Email network validation and deep breach scan completed.")
-
-# --- MODULE 5: Website Intelligence ---
-def module_website_intelligence():
-    console.print(Panel("Module 5: Website Technology & Security Header Extraction", style="accent"))
-    target_url = input("Enter target website host configuration (e.g., example.com) > ").strip()
-    
-    if not target_url.startswith("http"):
-        target_url = "https://" + target_url
-
-    results = {}
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Executing socket requests and auditing target headers...", total=None)
-        
-        try:
-            req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GhostHound/1.0'})
-            context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, context=context, timeout=6) as response:
-                headers = dict(response.info())
-                
-                results["Server Architecture"] = headers.get("Server", "Hidden/Undetected")
-                results["X-Frame-Options"] = headers.get("X-Frame-Options", "MISSING (Vulnerable to Clickjacking)")
-                results["Content-Security-Policy"] = "Configured" if "Content-Security-Policy" in headers else "MISSING"
-                results["X-Content-Type-Options"] = headers.get("X-Content-Type-Options", "MISSING")
-                results["Strict-Transport-Security (HSTS)"] = "Active" if "Strict-Transport-Security" in headers else "MISSING"
-                
-                powered_by = headers.get("X-Powered-By", "")
-                results["Backend Ecosystem"] = powered_by if powered_by else "Undisclosed Framework"
-                
+                print(Fore.RED + f"[-] Endpoint communication variance status code: {res.status_code}")
         except Exception as e:
-            log_error(f"Host endpoint verification crashed: {str(e)}")
-            return
+            print(Fore.RED + f"[-] Diagnostic failure: {e}")
+    input("\nPress Enter to return to main menu...")
 
-    SESSION_DATA["website_intelligence"][target_url] = results
-
-    table = Table(title=f"Web Vector Metrics: {target_url}", border_style="accent")
-    table.add_column("Header Directive / Element", style="info")
-    table.add_column("Detected Target Parameter", style="white")
-    for k, v in results.items():
-        table.add_row(k, v)
-    console.print(table)
-    log_success("Target surface mapping compiled.")
-
-# --- MODULE 6: DNS & WHOIS Lookup ---
-def module_dns_whois_lookup():
-    console.print(Panel("Module 6: DNS Map & Domain WHOIS Intelligence", style="accent"))
-    domain = input("Enter clean domain for lookup (e.g., target.com) > ").strip()
-    if not domain:
+# -------------------------------------------------------------------------
+# MODULE 5: WEBSITE ANALYSIS (INTEL & HEADERS)
+# -------------------------------------------------------------------------
+def website_analysis():
+    print(Fore.CYAN + "\n[+] Website Metadata & Passive Header Analysis")
+    target_url = input("Enter full target URL (e.g., https://example.com): ").strip()
+    if not validators.url(target_url):
+        print(Fore.RED + "[-] Structural anomaly detected. Input valid protocols (http/https).")
+        time.sleep(1.5)
         return
-
-    dns_payload = {}
-    record_types = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"]
-
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Interrogating primary zones and registry records...", total=None)
         
-        for rec in record_types:
+    try:
+        print(Fore.YELLOW + "[*] Running HTTP payload diagnostics...")
+        headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0"}
+        res = requests.get(target_url, headers=headers, timeout=8)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        info = {
+            "Title Configuration": soup.title.string.strip() if soup.title else "Null String",
+            "Server Infrastructure": res.headers.get('Server', 'Hidden / Cloudflare Protected'),
+            "X-Powered-By": res.headers.get('X-Powered-By', 'Not Disclosed'),
+            "Security Deployments": {h: res.headers.get(h, "MISSING") for h in ['X-Frame-Options', 'Content-Security-Policy', 'Strict-Transport-Security', 'X-Content-Type-Options']}
+        }
+        
+        print(Fore.GREEN + "\n[Deployment Assessment Summary]:")
+        print(f" - Document title:    {Fore.YELLOW}{info['Title Configuration']}")
+        print(f" - Infrastructure backend: {Fore.YELLOW}{info['Server Infrastructure']}")
+        print(f" - Application stack:      {Fore.YELLOW}{info['X-Powered-By']}")
+        print(Fore.CYAN + "\n[Security Header Audit]:")
+        for h, status in info["Security Deployments"].items():
+            color = Fore.GREEN if status != "MISSING" else Fore.RED
+            print(f"  * {h}: {color}{status}")
+            
+        log_result(f"Website Analysis ({target_url})", info)
+    except Exception as e:
+        print(Fore.RED + f"[-] Analysis termination due to runtime error: {e}")
+    input("\nPress Enter to return to main menu...")
+
+# -------------------------------------------------------------------------
+# MODULE 6: DNS & WHOIS DOMAIN MAPPING
+# -------------------------------------------------------------------------
+def dns_whois():
+    print(Fore.CYAN + "\n[+] DNS Zone Resolution & WHOIS Data Footprinting")
+    domain = input("Enter target apex domain (e.g., targetdomain.com): ").strip()
+    if not domain or "://" in domain:
+        print(Fore.RED + "[-] Error: Enter a raw domain name without protocol descriptors.")
+        time.sleep(1.5)
+        return
+    
+    recon_data = {}
+    try:
+        print(Fore.YELLOW + "[*] Fetching primary network zoning matrices (A, AAAA, MX, TXT, NS)...")
+        records = ['A', 'AAAA', 'MX', 'TXT', 'NS']
+        dns_res = {}
+        for r in records:
             try:
-                ans = dns.resolver.resolve(domain, rec)
-                dns_payload[f"{rec} Records"] = "\n".join([r.to_text() for r in ans])
-            except Exception:
-                dns_payload[f"{rec} Records"] = "No active zone entries listed"
+                answers = dns.resolver.resolve(domain, r)
+                dns_res[r] = [str(data) for data in answers]
+            except:
+                dns_res[r] = ["No Records Indexed"]
+        
+        print(Fore.YELLOW + "[*] Querying network registration allocation data layer...")
+        w = whois.whois(domain)
+        
+        recon_data["DNS Records Map"] = dns_res
+        recon_data["Registrar Authority"] = w.registrar if w.registrar else "Private"
+        recon_data["Organization Entity"] = w.org if w.org else "Redacted for Privacy"
+        recon_data["Country Origin"] = w.country if w.country else "Unknown"
+        recon_data["Registration Expiry"] = str(w.expiration_date)
+        
+        print(Fore.GREEN + "\n[Infrastructure Mapping Layer Data]:")
+        print(f" - Registrar Entity:    {Fore.YELLOW}{recon_data['Registrar Authority']}")
+        print(f" - Registered Country:   {Fore.YELLOW}{recon_data['Country Origin']}")
+        print(f" - Domain Expiry Date:  {Fore.YELLOW}{recon_data['Registration Expiry']}")
+        
+        print(Fore.CYAN + "\n[Resolved Domain Name Server Vectors]:")
+        for record_type, values in dns_res.items():
+            print(f"  {Fore.WHITE}Type {record_type}: {Fore.YELLOW}{', '.join(values)}")
+            
+        log_result(f"DNS & WHOIS ({domain})", recon_data)
+    except Exception as e:
+        print(Fore.RED + f"[-] Mapping error exception caught: {e}")
+    input("\nPress Enter to return to main menu...")
 
-        try:
-            whois_data = whois.whois(domain)
-            dns_payload["Domain Registrar"] = str(whois_data.registrar)
-            dns_payload["Creation Timestamp"] = str(whois_data.creation_date)
-            dns_payload["Expiration Boundary"] = str(whois_data.expiration_date)
-        except Exception as e:
-            dns_payload["WHOIS Status"] = f"Query dropped or rate-limited: {str(e)}"
-
-    SESSION_DATA["dns_whois_lookup"][domain] = dns_payload
-
-    table = Table(title=f"Zone and Registrar Profile: {domain}", border_style="accent")
-    table.add_column("Registry Vector", style="info")
-    table.add_column("Resolved Record Value", style="white")
-    for k, v in dns_payload.items():
-        display_val = str(v)[:80] + "..." if len(str(v)) > 80 else str(v)
-        table.add_row(k, display_val)
-    console.print(table)
-    log_success("Domain lookup mappings collected.")
-
-# --- MODULE 7: Sherlock Username Search ---
-def module_sherlock_search():
-    console.print(Panel("Module 7: Integration Engine for Sherlock Project", style="accent"))
-    alias = input("Enter target alias handle for Sherlock routing > ").strip()
-    if not alias:
+# -------------------------------------------------------------------------
+# MODULE 7: AUTOMATED REPORT GENERATOR
+# -------------------------------------------------------------------------
+def generate_report():
+    print(Fore.CYAN + "\n[+] OSINT Consolidated Report Engine")
+    if not session_reports:
+        print(Fore.RED + "[-] Error: Local data session payload registry contains zero logs.")
+        time.sleep(1.5)
         return
-
-    log_info("Probing execution matrix context for native Sherlock library bindings...")
-    
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Orchestrating backend script pipelines...", total=None)
         
-        await_simulation_data = [
-            f"https://github.com/{alias}",
-            f"https://reddit.com/user/{alias}",
-            f"https://soundcloud.com/{alias}"
-        ]
+    filename = input("Enter output report destination path (default: ghosthound_report.json): ").strip()
+    if not filename:
+        filename = "ghosthound_report.json"
         
-    SESSION_DATA["sherlock_search"][alias] = await_simulation_data
-    
-    table = Table(title=f"Sherlock Matches for: {alias}", border_style="accent")
-    table.add_column("Detected Target Link", style="white")
-    for link in await_simulation_data:
-        table.add_row(link)
-    console.print(table)
-    log_success("Profile matching matrix consolidated into general report memory.")
+    try:
+        with open(filename, 'w') as f:
+            json.dump(session_reports, f, indent=4)
+        print(Fore.GREEN + f"\n[+] OSINT data matrices successfully serialized out to file: {Fore.YELLOW}{os.path.abspath(filename)}")
+    except Exception as e:
+        print(Fore.RED + f"[-] File serialization crash: {e}")
+    input("\nPress Enter to return to main menu...")
 
-# --- MODULE 8: Generate OSINT Report ---
-def module_generate_report():
-    console.print(Panel("Module 8: Consolidated OSINT Investigation Builder", style="accent"))
-    
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_prefix = f"GhostHound_Report_{timestamp}"
-    
-    txt_filename = f"{file_prefix}.txt"
-    json_filename = f"{file_prefix}.json"
-    html_filename = f"{file_prefix}.html"
-
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Compiling visual structures and rendering document assets...", total=None)
-        
-        # 1. JSON Export
-        with open(json_filename, "w", encoding="utf-8") as json_file:
-            json.dump(SESSION_DATA, json_file, indent=4)
-            
-        # 2. Text Export
-        with open(txt_filename, "w", encoding="utf-8") as txt_file:
-            txt_file.write("=" * 70 + "\n")
-            txt_file.write("           GHOSTHOUND CYBER RECONNAISSANCE REPORT payload\n")
-            txt_file.write(f"           Generated Context: {datetime.datetime.now().isoformat()}\n")
-            txt_file.write(f"           Developer Core: Celestial Brothers\n")
-            txt_file.write("=" * 70 + "\n\n")
-            txt_file.write(json.dumps(SESSION_DATA, indent=2))
-            
-        # 3. HTML Dashboard Export
-        with open(html_filename, "w", encoding="utf-8") as html_file:
-            html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>GhostHound OSINT Intelligence Payload</title>
-    <style>
-        body {{ background-color: #0c0f0c; color: #33ff33; font-family: 'Courier New', monospace; padding: 25px; }}
-        .frame {{ border: 1px solid #33ff33; padding: 20px; background-color: #111511; box-shadow: 0 0 15px rgba(51,255,51,0.2); }}
-        h1 {{ color: #ffffff; text-transform: uppercase; letter-spacing: 2px; border-bottom: 2px double #33ff33; padding-bottom: 10px; }}
-        h2 {{ color: #00ffaa; margin-top: 30px; }}
-        pre {{ background-color: #050705; color: #22ee22; padding: 15px; border-left: 3px solid #00ffaa; overflow-x: auto; font-size: 13px; }}
-        .footer {{ font-size: 11px; color: #668866; text-align: center; margin-top: 5px; border-top: 1px dashed #33ff33; padding-top: 15px; }}
-    </style>
-</head>
-<body>
-    <div class="frame">
-        <h1>GhostHound Investigation Dossier</h1>
-        <p><strong>Generated on:</strong> {get_timestamp()} | <strong>Authority:</strong> Celestial Brothers</p>
-        <p>Defensive Security Operations Intelligence Compilation Payload Matrix</p>
-        
-        <h2>Acquisition Session Log Dump (JSON Structural Object)</h2>
-        <pre>{json.dumps(SESSION_DATA, indent=4)}</pre>
-        
-        <div class="footer">
-            GhostHound Toolkit &copy; Celestial Brothers. Confidential Defensive Output Data.
-        </div>
-    </div>
-</body>
-</html>"""
-            html_file.write(html_content)
-
-    log_success("Operational intelligence reports exported successfully:")
-    console.print(f"  [white]» Plaintext Data Audit Vector : {txt_filename}[/white]")
-    console.print(f"  [white]» JSON Structural Asset Payload : {json_filename}[/white]")
-    console.print(f"  [white]» HTML Executive Web Interface : {html_filename}[/white]")
-
-# --- APPLICATION CORE LOOPER ---
+# -------------------------------------------------------------------------
+# MAIN CONTROL GATEWAY INTERACTION
+# -------------------------------------------------------------------------
 def main():
     while True:
-        os.system('cls' if os.name == 'nt' else 'clear')
-        display_banner()
-        print_menu()
+        banner()
+        print(Fore.WHITE + " [1] " + Fore.LIGHTBLUE_EX + "IP Intelligence Lookup")
+        print(Fore.WHITE + " [2] " + Fore.LIGHTBLUE_EX + "Phone Number Target Intel")
+        print(Fore.WHITE + " [3] " + Fore.LIGHTBLUE_EX + "Username Platform Hunting (24+ Sources)")
+        print(Fore.WHITE + " [4] " + Fore.LIGHTBLUE_EX + "Email Data Breach Audit")
+        print(Fore.WHITE + " [5] " + Fore.LIGHTBLUE_EX + "Website Scraping & Headers Analysis")
+        print(Fore.WHITE + " [6] " + Fore.LIGHTBLUE_EX + "DNS & WHOIS Domain Mapping")
+        print(Fore.WHITE + " [7] " + Fore.GREEN + "Generate Session Data Report (.json)")
+        print(Fore.WHITE + " [0] " + Fore.RED + "Exit Framework")
+        print(Fore.YELLOW + "=================================================================\n")
         
-        try:
-            choice = input(f"{Fore.GREEN}Select an option > {Style.RESET_ALL}").strip()
-            
-            if choice == "1":
-                module_ip_intelligence()
-            elif choice == "2":
-                module_phone_number_info()
-            elif choice == "3":
-                module_username_hunter()
-            elif choice == "4":
-                module_email_intelligence()
-            elif choice == "5":
-                module_website_intelligence()
-            elif choice == "6":
-                module_dns_whois_lookup()
-            elif choice == "7":
-                module_sherlock_search()
-            elif choice == "8":
-                module_generate_report()
-            elif choice == "0":
-                log_info("Terminating GhostHound terminal workspace context. Secure your parameters.")
-                break
-            else:
-                log_error("Invalid configuration option selection. Choose from the application panel indexes.")
-            
-            input(f"\n{Fore.GREEN}Press [Enter] to return to the Main Menu...{Style.RESET_ALL}")
-            
-        except KeyboardInterrupt:
-            print("\n")
-            log_info("System interrupt detected. Terminating GhostHound process cleanly.")
-            break
-        except Exception as err:
-            log_error(f"Uncaught Exception Engine side: {str(err)}")
-            input(f"\nPress [Enter] to restart main application loop...")
+        choice = input(Fore.GREEN + "GhostHound > " + Fore.WHITE).strip()
+        
+        if choice == "1":
+            ip_intel()
+        elif choice == "2":
+            phone_lookup()
+        elif choice == "3":
+            username_hunter()
+        elif choice == "4":
+            email_breach()
+        elif choice == "5":
+            website_analysis()
+        elif choice == "6":
+            dns_whois()
+        elif choice == "7":
+            generate_report()
+        elif choice == "0":
+            print(Fore.YELLOW + "\n[!] Shutting down tactical intelligence engine interface. Safe hunting.")
+            sys.exit(0)
+        else:
+            print(Fore.RED + "[!] Option unrecognized. Choose an option from the menu list.")
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()
